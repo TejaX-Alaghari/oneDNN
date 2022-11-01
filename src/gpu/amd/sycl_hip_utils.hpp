@@ -246,6 +246,45 @@ public:
     virtual int get_error_number() const throw() { return error_number_; }
 };
 
+static status_t get_format(const memory_desc_t *md,
+        miopenTensorLayout_t &format, bool consider_ab_as_nhwc = false) {
+    const memory_desc_wrapper mem_wrapper(md);
+    if (mem_wrapper.matches_one_of_tag(format_tag::ab, format_tag::abc,
+                format_tag::abcd, format_tag::abcde, format_tag::abcdef)) {
+        format = miopenTensorLayout_t::miopenTensorNCHW;
+    } else if (mem_wrapper.matches_one_of_tag(
+                       format_tag::acb, format_tag::acdb, format_tag::acdeb)) {
+        format = miopenTensorLayout_t::miopenTensorNHWC;
+    } else {
+        return status::unimplemented;
+    }
+    if (consider_ab_as_nhwc && mem_wrapper.matches_one_of_tag(format_tag::ab)) {
+        format = miopenTensorLayout_t::miopenTensorNHWC;
+    }
+    return status::success;
+}
+
+static bool memory_desc_matches_nchw_vect_c(const memory_desc_t *mem_desc) {
+    // Only one block is supported for second (C) dimension and the block size
+    // must be 4 and the dimension has to be a multiple of block size.
+    auto is_int_8 = utils::one_of(mem_desc->data_type, data_type::s8);
+    auto &strides = mem_desc->format_desc.blocking.strides;
+    if (is_int_8 && mem_desc->format_desc.blocking.inner_nblks == 1
+            && mem_desc->format_desc.blocking.inner_idxs[0] == 1
+            && mem_desc->format_desc.blocking.inner_blks[0] == 4
+            && mem_desc->dims[1] % 4 == 0) {
+        for (int d = 0; d < mem_desc->ndims - 1; ++d)
+            if (strides[d] < strides[d + 1]) return false;
+        return true;
+    }
+    return false;
+}
+
+static bool memory_format_ok(const memory_desc_t *mem_desc) {
+    return (memory_desc_matches_nchw_vect_c(mem_desc)
+            || mem_desc->format_desc.blocking.inner_nblks == 0);
+}
+
 } // namespace amd
 } // namespace gpu
 } // namespace impl
