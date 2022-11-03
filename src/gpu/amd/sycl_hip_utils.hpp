@@ -70,6 +70,14 @@ inline bool has_zero_dims(const dnnl_dim_t *dims, int n_dims) {
     return false;
 }
 
+static bool has_different_block_size(
+        const memory_desc_t *src_md, const memory_desc_t *dst_md) {
+    return ((src_md->format_desc.blocking.inner_nblks > 0
+                    && dst_md->format_desc.blocking.inner_nblks == 0)
+            || (src_md->format_desc.blocking.inner_nblks == 0
+                    && dst_md->format_desc.blocking.inner_nblks > 0));
+}
+
 inline status_t convert_data_type(const memory_desc_t *mem_desc,
         miopenDataType_t *miopen_data_type, bool vectorized = true) {
     switch (mem_desc->data_type) {
@@ -246,24 +254,6 @@ public:
     virtual int get_error_number() const throw() { return error_number_; }
 };
 
-static status_t get_format(const memory_desc_t *md,
-        miopenTensorLayout_t &format, bool consider_ab_as_nhwc = false) {
-    const memory_desc_wrapper mem_wrapper(md);
-    if (mem_wrapper.matches_one_of_tag(format_tag::ab, format_tag::abc,
-                format_tag::abcd, format_tag::abcde, format_tag::abcdef)) {
-        format = miopenTensorLayout_t::miopenTensorNCHW;
-    } else if (mem_wrapper.matches_one_of_tag(
-                       format_tag::acb, format_tag::acdb, format_tag::acdeb)) {
-        format = miopenTensorLayout_t::miopenTensorNHWC;
-    } else {
-        return status::unimplemented;
-    }
-    if (consider_ab_as_nhwc && mem_wrapper.matches_one_of_tag(format_tag::ab)) {
-        format = miopenTensorLayout_t::miopenTensorNHWC;
-    }
-    return status::success;
-}
-
 static bool memory_desc_matches_nchw_vect_c(const memory_desc_t *mem_desc) {
     // Only one block is supported for second (C) dimension and the block size
     // must be 4 and the dimension has to be a multiple of block size.
@@ -283,6 +273,28 @@ static bool memory_desc_matches_nchw_vect_c(const memory_desc_t *mem_desc) {
 static bool memory_format_ok(const memory_desc_t *mem_desc) {
     return (memory_desc_matches_nchw_vect_c(mem_desc)
             || mem_desc->format_desc.blocking.inner_nblks == 0);
+}
+
+static bool adjust_dim_for_dnn(
+        int *dims, int n_dims, const memory_desc_t *mem_desc) {
+    if (memory_desc_matches_nchw_vect_c(mem_desc)) {
+        dims[n_dims] = mem_desc->format_desc.blocking.inner_blks[0];
+        dims[mem_desc->format_desc.blocking.inner_idxs[0]]
+                /= mem_desc->format_desc.blocking.inner_blks[0];
+        return true;
+    }
+
+    return false;
+}
+
+static bool adjust_stride_for_dnn(
+        int *stride, int n_dims, const memory_desc_t *mem_desc) {
+    if (memory_desc_matches_nchw_vect_c(mem_desc)) {
+        stride[n_dims] = mem_desc->format_desc.blocking.inner_nblks;
+        return true;
+    }
+
+    return false;
 }
 
 } // namespace amd

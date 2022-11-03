@@ -21,6 +21,13 @@ file(GLOB_RECURSE SOURCES
 set(OBJ_LIB ${DNNL_LIBRARY_NAME}_sycl_amd)
 add_library(${OBJ_LIB} OBJECT ${SOURCES})
 
+append(CMAKE_CXX_FLAGS "-fsycl-targets=amdgcn-amd-amdhsa -Xsycl-target-backend --offload-arch=gfx1011")
+
+append(CMAKE_SHARED_LINKER_FLAGS "-fsycl-targets=amdgcn-amd-amdhsa -Xsycl-target-backend --offload-arch=gfx1011")
+append(CMAKE_STATIC_LINKER_FLAGS "-fsycl-targets=amdgcn-amd-amdhsa -Xsycl-target-backend --offload-arch=gfx1011")
+
+# Suppress irrelevant warning about incompatible triplets.
+append(CMAKE_CXX_FLAGS "-Wno-linker-warnings")
 
 set_target_properties(${OBJ_LIB} PROPERTIES COMPILE_DEFINITIONS "$<TARGET_PROPERTY:rocBLAS::rocBLAS,INTERFACE_COMPILE_DEFINITIONS>;$<TARGET_PROPERTY:MIOpen::MIOpen,INTERFACE_COMPILE_DEFINITIONS>"
         COMPILE_OPTIONS "$<TARGET_PROPERTY:rocBLAS::rocBLAS,INTERFACE_COMPILE_OPTIONS>;$<TARGET_PROPERTY:MIOpen::MIOpen,INTERFACE_COMPILE_OPTIONS>")
