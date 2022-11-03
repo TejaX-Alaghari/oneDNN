@@ -55,11 +55,14 @@ public:
     const dnnl::impl::impl_list_item_t *get_reorder_implementation_list(
             const memory_desc_t *src_md,
             const memory_desc_t *dst_md) const override {
+        return hip_gpu_engine_impl_list_t::get_reorder_implementation_list(
+                src_md, dst_md);
+        /*
         static impl_list_item_t hip_reorder_impl_list[] = {
-
                 nullptr,
         };
         return hip_reorder_impl_list;
+        */
     }
 
     const dnnl::impl::impl_list_item_t *
