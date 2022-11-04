@@ -154,7 +154,7 @@ void dispatch_t::def_kernel_macros(kernel_ctx_t &kernel_ctx) const {
 
     // Find a unique prefix (in case there are many kernels in a file).
     std::string gws_prefix;
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         if (!kernel_ctx.has_macro(utils::format("GWS%d_DEF", i))) {
             gws_prefix = "GWS" + std::to_string(i);
             break;
@@ -331,6 +331,13 @@ void dispatch_t::generate_override(const size_t *grange, const size_t *lrange) {
 
     nd_range_ = nd_range_t(grange, lrange);
     generate_called = true;
+}
+
+// Allows manual setting of local work sizes.
+void dispatch_t::set_lws(const size_t *lrange) {
+    assert(generate_called);
+    auto *grange = nd_range_.global_range();
+    nd_range_ = nd_range_t(grange, lrange);
 }
 
 void dispatch_t::define_dim_with_md_hint(
