@@ -19,6 +19,7 @@
 #define GPU_AMD_MIOPEN_CONV_FILTER_ADJUSTMENT_BASE_HPP
 
 #include "miopen/miopen.h"
+
 #include "common/type_helpers.hpp"
 #include "gpu/amd/sycl_hip_engine.hpp"
 #include "gpu/amd/sycl_hip_utils.hpp"
@@ -66,7 +67,7 @@ public:
         CHECK(create_and_set_tensor_descriptor(&current_filter_desc_,
                 filter_data_types, filter_ndims, filter_dims,
                 current_filter_strides));
-                
+
         // Set a descriptor for the transform filter.
         CHECK(create_and_set_tensor_descriptor(&transform_filter_desc_,
                 filter_data_types, filter_ndims, filter_dims,

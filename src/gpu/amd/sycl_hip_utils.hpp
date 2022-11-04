@@ -246,12 +246,11 @@ public:
     virtual int get_error_number() const throw() { return error_number_; }
 };
 
-static status_t get_format(const memory_desc_t *md, miopenTensorLayout_t &format,
-        bool consider_ab_as_nhwc = false) {
+static status_t get_format(const memory_desc_t *md,
+        miopenTensorLayout_t &format, bool consider_ab_as_nhwc = false) {
     const memory_desc_wrapper mem_wrapper(md);
     if (mem_wrapper.matches_one_of_tag(format_tag::ab, format_tag::abc,
-                       format_tag::abcd, format_tag::abcde,
-                       format_tag::abcdef)) {
+                format_tag::abcd, format_tag::abcde, format_tag::abcdef)) {
         format = miopenTensorLayout_t::miopenTensorNCHW;
     } else if (mem_wrapper.matches_one_of_tag(
                        format_tag::acb, format_tag::acdb, format_tag::acdeb)) {
