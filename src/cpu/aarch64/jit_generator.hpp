@@ -176,19 +176,8 @@ public:
 
     void postamble() {
         using namespace Xbyak_aarch64::util;
-        uint64_t sveLen = get_sve_length();
 
         mov(x9, sp);
-
-        if (sveLen) /* SVE is available. */
-            eor(P_ALL_ONE.b, P_ALL_ONE / Xbyak_aarch64::T_z, P_ALL_ONE.b,
-                    P_ALL_ONE.b);
-        if (sveLen >= SVE_256)
-            eor(P_NOT_128.b, P_NOT_128 / Xbyak_aarch64::T_z, P_NOT_128.b,
-                    P_NOT_128.b);
-        if (sveLen >= SVE_512)
-            eor(P_NOT_256.b, P_NOT_256 / Xbyak_aarch64::T_z, P_NOT_256.b,
-                    P_NOT_256.b);
 
         if (vreg_to_preserve) {
             ld4((v8.d - v11.d)[0], post_ptr(x9, vreg_len_preserve * 4));
@@ -444,6 +433,26 @@ public:
         eor(Xbyak_aarch64::ZRegD(z1.getIdx()),
                 Xbyak_aarch64::ZRegD(z2.getIdx()),
                 Xbyak_aarch64::ZRegD(z3.getIdx()));
+    }
+
+    void uni_ld1rw(const Xbyak_aarch64::VReg4S &dst,
+            const Xbyak_aarch64::XReg &base, const int64_t off) {
+        if (off == 0) {
+            ld1r(dst, ptr(base));
+        } else {
+            add_imm(X_DEFAULT_ADDR, base, off, X_TMP_0);
+            ld1r(dst, ptr(X_DEFAULT_ADDR));
+        }
+    }
+
+    void uni_ld1rw(const Xbyak_aarch64::ZRegS &dst,
+            const Xbyak_aarch64::XReg &base, const int64_t off) {
+        if (-32 <= off && off < 32) {
+            ld1rw(dst, P_ALL_ONE / Xbyak_aarch64::T_z, ptr(base, (int)off));
+        } else {
+            add_imm(X_DEFAULT_ADDR, base, off, X_TMP_0);
+            ld1rw(dst, P_ALL_ONE / Xbyak_aarch64::T_z, ptr(X_DEFAULT_ADDR));
+        }
     }
 
     void uni_ldr(

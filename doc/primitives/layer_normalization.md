@@ -50,9 +50,9 @@ The \f$\gamma(c)\f$ and \f$\beta(c)\f$ tensors are considered learnable.
    is not set), they become outputs for the propagation kind
    #dnnl_forward_training (because they would be required during the backward
    propagation). Data layout for mean and variance must be specified during
-   initialization of the layer normalization descriptor by passing the memory
-   descriptor for statistics (e.g., by passing stat_desc in
-   dnnl::layer_normalization_forward::desc::desc()). Mean and variance are
+   creation of the layer normalization primitive descriptor by passing the
+   memory descriptor for statistics (e.g., by passing stat_desc in
+   dnnl::layer_normalization_forward::primitive_desc()). Mean and variance are
    not exposed for the propagation kind #dnnl_forward_inference.
 
 ### Backward
@@ -85,18 +85,20 @@ requires different inputs and outputs. For clarity, a summary is shown below.
 When executed, the inputs and outputs should be mapped to an execution
 argument index as specified by the following table.
 
-| Primitive input/output  | Execution argument index  |
-| ---                     | ---                       |
-| \src                    | DNNL_ARG_SRC              |
-| \f$\gamma\f$            | DNNL_ARG_SCALE            |
-| \f$\beta\f$             | DNNL_ARG_SHIFT            |
-| mean (\f$\mu\f$)        | DNNL_ARG_MEAN             |
-| variance (\f$\sigma\f$) | DNNL_ARG_VARIANCE         |
-| \dst                    | DNNL_ARG_DST              |
-| \diffdst                | DNNL_ARG_DIFF_DST         |
-| \diffsrc                | DNNL_ARG_DIFF_SRC         |
-| \diffgamma              | DNNL_ARG_DIFF_SCALE       |
-| \diffbeta               | DNNL_ARG_DIFF_SHIFT       |
+| Primitive input/output  | Execution argument index             |
+| ---                     | ---                                  |
+| \src                    | DNNL_ARG_SRC                         |
+| \f$\gamma\f$            | DNNL_ARG_SCALE                       |
+| \f$\beta\f$             | DNNL_ARG_SHIFT                       |
+| mean (\f$\mu\f$)        | DNNL_ARG_MEAN                        |
+| variance (\f$\sigma\f$) | DNNL_ARG_VARIANCE                    |
+| \dst                    | DNNL_ARG_DST                         |
+| \diffdst                | DNNL_ARG_DIFF_DST                    |
+| \diffsrc                | DNNL_ARG_DIFF_SRC                    |
+| \diffgamma              | DNNL_ARG_DIFF_SCALE                  |
+| \diffbeta               | DNNL_ARG_DIFF_SHIFT                  |
+| \f$src scale\f$         | DNNL_ARG_ATTR_SCALES \| DNNL_ARG_SRC |
+| \f$dst scale\f$         | DNNL_ARG_ATTR_SCALES \| DNNL_ARG_DST |
 
 
 ## Implementation Details
@@ -104,9 +106,9 @@ argument index as specified by the following table.
 ### General Notes
 
 1. The different flavors of the primitive are partially controlled by the @p
-   flags parameter that is passed to the operation descriptor initialization
-   function (e.g., dnnl::layer_normalization_forward::desc::desc()). Multiple
-   flags can be set using the bitwise OR operator (`|`).
+   flags parameter that is passed to the primitive descriptor creation
+   function (e.g., dnnl::layer_normalization_forward::primitive_desc()).
+   Multiple flags can be set using the bitwise OR operator (`|`).
 
 2. For forward propagation, the mean and variance might be either computed at
    runtime (in which case they are outputs of the primitive) or provided by
@@ -129,9 +131,9 @@ Attributes enable you to modify the behavior of the layer normalization
 primitive. The following attributes are supported by the layer normalization
 primitive:
 
-| Propagation | Type      | Operation                                                    | Description                                                    | Restrictions                                  |
-| :--         | :--       | :--                                                          | :--                                                            | :--                                           |
-| forward     | attribute | [Output scale](@ref dnnl::primitive_attr::set_output_scales) | Scales the result of layer normalization by given scale factor | int8 layer normalization only, zero mask only |
+| Propagation | Type      | Operation                                            | Description                                                   | Restrictions                                                                       |
+| :--         | :--       | :--                                                  | :--                                                           | :--                                                                                |
+| forward     | attribute | [Scales](@ref dnnl::primitive_attr::set_scales_mask) | Scales the corresponding tensor by the given scale factor(s). | Supported only for int8 layer normalization and one scale per tensor is supported. |
 
 ### Data Type Support
 
@@ -156,10 +158,10 @@ number of dimensions equal to (\f$data\_ndims - 1\f$) and size
 The corresponding memory object can have an arbitrary memory format. Unless mean
 and variance are computed at runtime and not exposed (i.e., propagation kind is
 #dnnl_forward_inference and #dnnl_use_global_stats is not set), the user should
-provide a memory descriptor for statistics when initializing the layer
-normalization descriptor. For best performance, it is advised to use the memory
-format that follows the data memory format; i.e., if the data format is
-#dnnl_tnc, the best performance can be expected for statistics with the
+provide a memory descriptor for statistics when creating the layer
+normalization primitive descriptor. For best performance, it is advised to use
+the memory format that follows the data memory format; i.e., if the data format
+is #dnnl_tnc, the best performance can be expected for statistics with the
 #dnnl_tn format and suboptimal for statistics with the #dnnl_nt format.
 
 #### Scale and Shift
