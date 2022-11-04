@@ -20,7 +20,6 @@
 
 #include "common/type_helpers.hpp"
 #include "gpu/amd/sycl_hip_utils.hpp"
-// #include <cstdint>
 
 namespace dnnl {
 namespace impl {
