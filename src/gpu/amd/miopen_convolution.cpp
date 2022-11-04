@@ -37,9 +37,9 @@ status_t miopen_convolution_fwd_t::execute_convolution(
         auto arg_dst = CTX_OUT_SYCL_MEMORY(DNNL_ARG_DST);
         auto arg_bias = CTX_IN_SYCL_MEMORY(DNNL_ARG_BIAS);
         auto arg_scratch = CTX_SCRATCH_SYCL_MEMORY(
-                memory_tracking::names::key_conv_cudnn_algo);
+                memory_tracking::names::key_conv_miopen_algo);
         auto arg_filter_scratch = CTX_SCRATCH_SYCL_MEMORY(
-                memory_tracking::names::key_conv_cudnn_filter);
+                memory_tracking::names::key_conv_miopen_filter);
         auto arg_oscale = CTX_IN_SYCL_MEMORY(DNNL_ARG_ATTR_OUTPUT_SCALES);
 
         impl::sycl::sycl_memory_arg_t<::sycl::access::mode::read_write>
@@ -50,10 +50,10 @@ status_t miopen_convolution_fwd_t::execute_convolution(
         if (pd()->use_temp_dst()) {
             memory_storage_t *temp_dst_mem = scratch_storage.get();
             memory_storage_t *temp_reorder_mem = scratch_storage_2.get();
-            temp_dst = impl::sycl::sycl_memory_arg_t<
-                    ::sycl::access::mode::read_write>(temp_dst_mem, cgh);
-            temp_reorder = impl::sycl::sycl_memory_arg_t<
-                    ::sycl::access::mode::read_write>(temp_reorder_mem, cgh);
+            temp_dst = impl::sycl::sycl_memory_arg_t<::sycl::access::mode::read_write>(
+                    temp_dst_mem, cgh);
+            temp_reorder = impl::sycl::sycl_memory_arg_t<::sycl::access::mode::read_write>(
+                    temp_reorder_mem, cgh);
         }
 
         compat::host_task(cgh, [=](const compat::interop_handle &ih) {
@@ -89,9 +89,9 @@ status_t miopen_convolution_bwd_data_t::execute_convolution(
         auto arg_diff_dst = CTX_IN_SYCL_MEMORY(DNNL_ARG_DIFF_DST);
         auto arg_bias = CTX_IN_SYCL_MEMORY(DNNL_ARG_BIAS);
         auto arg_scratch = CTX_SCRATCH_SYCL_MEMORY(
-                memory_tracking::names::key_conv_cudnn_algo);
+                memory_tracking::names::key_conv_miopen_algo);
         auto arg_filter_scratch = CTX_SCRATCH_SYCL_MEMORY(
-                memory_tracking::names::key_conv_cudnn_filter);
+                memory_tracking::names::key_conv_miopen_filter);
 
         compat::host_task(cgh, [=](const compat::interop_handle &ih) {
             auto &sycl_engine = *utils::downcast<sycl_hip_engine_t *>(
@@ -145,12 +145,11 @@ status_t miopen_convolution_bwd_weights_t::execute_convolution(
         auto arg_diff_weights = CTX_OUT_SYCL_MEMORY(DNNL_ARG_DIFF_WEIGHTS);
         auto arg_diff_dst = CTX_IN_SYCL_MEMORY(DNNL_ARG_DIFF_DST);
         auto arg_scratch = CTX_SCRATCH_SYCL_MEMORY(
-                memory_tracking::names::key_conv_cudnn_algo);
+                memory_tracking::names::key_conv_miopen_algo);
         auto arg_filter_scratch = CTX_SCRATCH_SYCL_MEMORY(
-                memory_tracking::names::key_conv_cudnn_filter);
+                memory_tracking::names::key_conv_miopen_filter);
 
-        impl::sycl::sycl_memory_arg_t<::sycl::access::mode::write>
-                arg_diff_bias; //chnages
+        impl::sycl::sycl_memory_arg_t<::sycl::access::mode::write> arg_diff_bias;
 
         if (with_bias) {
             arg_diff_bias = CTX_OUT_SYCL_MEMORY(DNNL_ARG_DIFF_BIAS);

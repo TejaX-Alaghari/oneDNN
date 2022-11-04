@@ -24,7 +24,6 @@
 #include "gpu/amd/miopen_convolution_pd.hpp"
 #include "gpu/amd/sycl_hip_engine.hpp"
 #include "gpu/amd/sycl_hip_utils.hpp"
-
 #include <miopen/miopen.h>
 
 namespace dnnl {
@@ -46,8 +45,8 @@ struct miopen_convolution_fwd_t : public primitive_t {
 
         status_t init(engine_t *engine) {
             using namespace data_type;
-
             using sm_t = primitive_attr_t::skip_mask_t;
+
             const auto attr_skip_mask = sm_t::oscale_runtime | sm_t::post_ops;
 
             bool ok = utils::one_of(desc()->prop_kind,
@@ -63,6 +62,7 @@ struct miopen_convolution_fwd_t : public primitive_t {
                                         weights_md_.data_type)
                                     && utils::one_of(
                                             dst_md_.data_type, f32, s8)));
+                           
             ok = ok && this->set_default_formats();
             ok = ok
                     && IMPLICATION(
@@ -83,6 +83,9 @@ struct miopen_convolution_fwd_t : public primitive_t {
             ok = ok && memory_format_ok(&weights_md_);
             ok = ok && memory_format_ok(&dst_md_);
             if (with_bias()) ok = ok && memory_format_ok(&bias_md_);
+            
+            ok = ok && check_format();
+
             if (!ok) return status::unimplemented;
 
             if (check_for_zero_dims()) return status::success;
@@ -96,11 +99,26 @@ struct miopen_convolution_fwd_t : public primitive_t {
             impl_.reset(new miopen_convolution_impl_fwd_t());
             return impl_->init(engine, this, use_temp_dst);
         }
-        bool with_scratchpad() const { return impl_->with_scratchpad(); }
+
+        bool check_format() const {
+            return (memory_desc_wrapper(src_md()).matches_one_of_tag(
+                            //format_tag::a, format_tag::ab, format_tag::abc,
+                            format_tag::abcd)//, format_tag::abcde)
+                    && memory_desc_wrapper(weights_md()).matches_one_of_tag(
+                            //format_tag::a, format_tag::ab, format_tag::abc,
+                            format_tag::abcd)//, format_tag::abcde)
+                    && memory_desc_wrapper(dst_md()).matches_one_of_tag(
+                            //format_tag::a, format_tag::ab, format_tag::abc,
+                            format_tag::abcd));//, format_tag::abcde));
+        }
+
+        bool with_scratchpad() const {
+            return impl_->with_scratchpad(); }
+
         std::shared_ptr<miopen_convolution_impl_base_t> impl_;
         memory_desc_t dst_md_temp_;
 
-        bool use_temp_dst() const {
+        bool use_temp_dst() const { 
             if (impl_.get()) return impl_->use_temp_dst();
             return false;
         }
@@ -108,6 +126,7 @@ struct miopen_convolution_fwd_t : public primitive_t {
     private:
         bool set_default_formats() {
             using namespace format_tag;
+
             if (src_md_.data_type == dnnl_s8) {
                 auto dat_tag = utils::pick(ndims() - 3, nwc, nhwc, ndhwc);
                 auto wei_tag = with_groups()
@@ -144,12 +163,12 @@ struct miopen_convolution_fwd_t : public primitive_t {
         }
 
         bool check_s8_configuration() const {
-            const auto check_nhwc
-                    = [](const memory_desc_t &md, bool is_weights = false) {
-                          miopenTensorLayout_t fmt;
-                          get_format(&md, fmt, is_weights);
-                          return fmt == miopenTensorNHWC;
-                      };
+            const auto check_nhwc = [](const memory_desc_t &md,
+                                            bool is_weights = false) {
+                miopenTensorLayout_t fmt;
+                get_format(&md, fmt, is_weights);
+                return fmt == miopenTensorNHWC;
+            };
 
             return check_nhwc(src_md_) && check_nhwc(dst_md_)
                     && check_nhwc(weights_md_, true)
@@ -186,6 +205,7 @@ struct miopen_convolution_fwd_t : public primitive_t {
 
         return status::success;
     }
+
     status_t execute_convolution(
             const exec_ctx_t &ctx, bool with_bias, bool with_scratchpad) const;
 
@@ -195,7 +215,10 @@ private:
                 mem_storage)
                 ->buffer();
     }
-    const pd_t *pd() const { return (const pd_t *)primitive_t::pd().get(); }
+    const pd_t *pd() const { 
+        return (const pd_t *)primitive_t::pd().get();
+    }
+
     std::shared_ptr<memory_storage_t> scratch_storage;
     std::shared_ptr<memory_storage_t> scratch_storage_2;
 };
@@ -211,6 +234,7 @@ struct miopen_convolution_bwd_data_t : public primitive_t {
 
         status_t init(engine_t *engine) {
             using namespace data_type;
+
             bool ok = desc()->prop_kind == prop_kind::backward_data;
             ok = ok && this->set_default_formats();
             ok = ok
@@ -242,6 +266,7 @@ struct miopen_convolution_bwd_data_t : public primitive_t {
 
         bool set_default_formats() {
             using namespace format_tag;
+
             auto dat_tag = utils::pick(ndims() - 3, ncw, nchw, ncdhw);
             auto wei_tag = with_groups()
                     ? utils::pick(ndims() - 3, goiw, goihw, goidhw)
@@ -254,7 +279,7 @@ struct miopen_convolution_bwd_data_t : public primitive_t {
 
     ~miopen_convolution_bwd_data_t() {}
     status_t execute(const exec_ctx_t &ctx) const override {
-        if (pd()->check_for_zero_dims()) { return status::success; }
+        if (pd()->check_for_zero_dims()) {  return status::success; }
         return execute_convolution(
                 ctx, pd()->with_bias(), pd()->with_scratchpad());
     }
@@ -276,6 +301,7 @@ struct miopen_convolution_bwd_weights_t : public primitive_t {
 
         status_t init(engine_t *engine) {
             using namespace data_type;
+
             bool ok = desc()->prop_kind == prop_kind::backward_weights;
             ok = ok && this->set_default_formats();
             ok = ok

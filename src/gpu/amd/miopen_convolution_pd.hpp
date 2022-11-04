@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020 Intel Corporation
+* Copyright 2020-2022 Intel Corporation
 * Copyright 2020 Codeplay Software Limited
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,8 +15,8 @@
 * limitations under the License.
 *******************************************************************************/
 
-#ifndef GPU_AMD_CUDNN_CONVOLUTION_PD_HPP
-#define GPU_AMD_CUDNN_CONVOLUTION_PD_HPP
+#ifndef GPU_AMD_MIOPEN_CONVOLUTION_PD_HPP
+#define GPU_AMD_MIOPEN_CONVOLUTION_PD_HPP
 
 #include "common/convolution_pd.hpp"
 #include "gpu/amd/sycl_hip_utils.hpp"

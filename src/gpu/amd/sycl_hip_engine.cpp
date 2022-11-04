@@ -23,12 +23,12 @@
 #include "sycl/sycl_utils.hpp"
 
 #include "gpu/amd/miopen_binary.hpp"
-#include "gpu/amd/miopen_convolution.hpp"
 #include "gpu/amd/miopen_eltwise.hpp"
 #include "gpu/amd/miopen_lrn.hpp"
 #include "gpu/amd/miopen_pooling.hpp"
 #include "gpu/amd/miopen_reduction.hpp"
 #include "gpu/amd/miopen_softmax.hpp"
+#include "gpu/amd/miopen_convolution.hpp"
 #include "gpu/amd/sycl_hip_compat.hpp"
 #include "gpu/amd/sycl_hip_engine.hpp"
 #include "gpu/amd/sycl_hip_scoped_context.hpp"

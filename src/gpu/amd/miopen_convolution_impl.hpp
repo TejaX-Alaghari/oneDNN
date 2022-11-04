@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2021 Intel Corporation
+* Copyright 2020-2022 Intel Corporation
 * Copyright 2020 Codeplay Software Limited
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,6 +17,7 @@
 #ifndef GPU_AMD_MIOPEN_CONVOLUTION_IMPL_HPP
 #define GPU_AMD_MIOPEN_CONVOLUTION_IMPL_HPP
 
+#include "miopen/miopen.h"
 #include "common/c_types_map.hpp"
 #include "common/convolution_pd.hpp"
 #include "common/utils.hpp"
@@ -26,7 +27,6 @@
 #include "gpu/amd/sycl_hip_scoped_context.hpp"
 #include "gpu/amd/sycl_hip_stream.hpp"
 #include "gpu/amd/sycl_hip_utils.hpp"
-#include "miopen/miopen.h"
 
 namespace dnnl {
 namespace impl {
@@ -213,38 +213,10 @@ public:
     };
 
     status_t create_and_set_convolution_desc(const convolution_pd_t *pd) {
-        MIOPEN_EXECUTE_FUNC_V(miopenCreateConvolutionDescriptor, &conv_desc);
-        // Allow  miopen to dispatch into Tensor Core implementations
-        int arrayLength = ndims[x] - 2;
-        int pad_h, pad_w, u, v, d_h, d_w;
-        if (arrayLength == 2) {
-            pad_h = padding[0];
-            pad_w = padding[1];
-            u = filter_strides[0];
-            v = filter_strides[1];
-            d_h = dilation[0];
-            d_w = dilation[1];
 
-            MIOPEN_EXECUTE_FUNC_V(miopenInitConvolutionDescriptor, conv_desc,
-                    miopenConvolution, pad_h, pad_w, u, v, d_h, d_w);
-        } else if (arrayLength == 3) {
-            // 3D convolution Scenario
-            // Got to book keep additional padding, stride and dilation info along
-            //  depth direction
-            // Book keeping using global static std::map container
-            // But first lets initialize the 2D Description
-            pad_h = padding[0];
-            pad_w = padding[1];
-            u = filter_strides[0];
-            v = filter_strides[1];
-            d_h = dilation[0];
-            d_w = dilation[1];
-
-            MIOPEN_EXECUTE_FUNC_V(miopenInitConvolutionDescriptor, conv_desc,
-                    miopenConvolution, pad_h, pad_w, u, v, d_h, d_w);
-        } else {
-            return status::unimplemented;
-        }
+        CHECK(MIOPEN_EXECUTE_FUNC_S(miopenCreateConvolutionDescriptor, &conv_desc));
+        CHECK(MIOPEN_EXECUTE_FUNC_S(miopenInitConvolutionNdDescriptor, conv_desc,
+            ndims[x] - 2, padding, filter_strides, dilation, miopenConvolution));
 
         // Check for groups and set group count if necessary
         if (with_groups) {
@@ -302,14 +274,13 @@ public:
         miopenTensorOp_t tensorOp = miopenTensorOpAdd;
         MIOPEN_EXECUTE_FUNC_V(miopenOpTensor, handle, tensorOp, &alpha,
                 descs[io::y], x, &alpha2, descs[io::y], y, &beta, descs[io::y],
-                y);
+                y); 
     }
 
     void execute_scale(miopenHandle_t handle, void *y, void *rt_oscale) const {
         if (do_scaling) {
             const void *s = runtime_scaling ? rt_oscale : &output_scaling;
-            MIOPEN_EXECUTE_FUNC_V(
-                    miopenScaleTensor, handle, descs[io::y], y, s);
+            MIOPEN_EXECUTE_FUNC_V(miopenScaleTensor, handle, descs[io::y], y, s);
         }
     }
 
@@ -401,14 +372,15 @@ protected:
     miopenConvFwdAlgorithm_t fwd_alg_kind;
     std::vector<miopenConvAlgoPerf_t> perf;
 
-    int requested_algo_count = 5;
-    int returned_algo_count = 0;
     int num_post_ops = 0;
     primitive_kind_t post_ops[2];
     bool need_reorder = false;
     float sum_scale = 1.0f;
     bool conv_bias_eltwise = false;
     bool conv_bias = false;
+    size_t solutionCount =0;
+    miopenConvSolution_t solutions;
+    size_t actualCount=0;
 
     miopenFusionPlanDescriptor_t fusePlanDesc;
     miopenOperatorArgs_t fusionArgs;
@@ -455,9 +427,8 @@ public:
         conv_bias = with_bias && !conv_bias_eltwise
                 && !do_scaling
                 // XXX:  miopen limitation on algorithm support when activation is
-                // equal to  miopen_ACTIVATION_IDENTITY.
+                // equal to  miopenActivationPASTHRU.
                 && fwd_alg_kind == miopenConvolutionFwdAlgoImplicitGEMM
-                // XXX:  miopen has a correctness issue for fusion of group conv
                 && pd->G() == 1;
         // If the only post-op is fused then there is no need for temp dst
         if (conv_bias_eltwise && num_post_ops == 1) use_temp_dst_ = false;
@@ -466,12 +437,11 @@ public:
             data_types[y] = miopenFloat;
             need_reorder = true;
             int strides_[DNNL_MAX_NDIMS];
-            convert_dims(pd->src_md()->format_desc.blocking.strides, strides_,
-                    pd->ndims());
+            convert_dims(pd->src_md()->format_desc.blocking.strides,
+                    strides_, pd->ndims());
             CHECK(create_and_set_tensor_descriptor(&reorder_dst_desc,
                     reorder_type, ndims[y], dims[y], strides_));
         }
-
         return status::success;
     }
 
@@ -484,63 +454,53 @@ public:
         CHECK(configure_post_ops(pd));
         CHECK(init_scratchpad(engine, pd));
 
-        if (conv_bias_eltwise) {
+        if (conv_bias_eltwise)
+        {
             int n, c, h, w;
-            MIOPEN_EXECUTE_FUNC(miopenGetConvolutionForwardOutputDim, conv_desc,
-                    descs[io::x], weights_desc, &n, &c, &h, &w);
-            int dim_bia[4] = {1, c, 1, 1};
-            int dim_dst[4] = {n, c, h, w};
+            MIOPEN_EXECUTE_FUNC(miopenGetConvolutionForwardOutputDim,
+                                conv_desc, descs[io::x], weights_desc,
+                                &n, &c, &h, &w);
+            int dim_bia[4] = {1,c,1,1};     
+            int dim_dst[4] = {n,c,h,w};
+
             CHECK(create_and_set_tensor_descriptor(&descs[bias],
                     data_types[bias], ndims[bias], dim_bia, strides[bias]));
 
-            CHECK(create_and_set_tensor_descriptor(
-                    &descs[y], data_types[y], ndims[y], dim_dst, strides[y]));
+            CHECK(create_and_set_tensor_descriptor(&descs[y],
+                    data_types[y], ndims[y], dim_dst, strides[y]));
 
             miopenActivationMode_t act_mode;
-            switch (eltwise_algorithm_kind(pd)) {
-                case alg_kind::eltwise_tanh:
-                    act_mode = miopenActivationTANH;
-                    break;
-                case alg_kind::eltwise_elu:
-                    act_mode = miopenActivationELU;
-                    break;
-                case alg_kind::eltwise_relu:
-                    act_mode = miopenActivationRELU;
-                    break;
+            switch (eltwise_algorithm_kind(pd))
+            {
+                case alg_kind::eltwise_tanh: act_mode = miopenActivationTANH; break;
+                case alg_kind::eltwise_elu: act_mode = miopenActivationELU; break;
+                case alg_kind::eltwise_relu: act_mode = miopenActivationRELU; break;
                 case alg_kind::eltwise_logistic:
                     act_mode = miopenActivationLOGISTIC;
                     break;
                 default: return status::unimplemented;
             }
 
-            // For ReLU, a ceiling of 0 means no limit.
             double ceiling = eltwise_alpha(pd);
 
-            if (act_mode == miopenActivationMode_t::miopenActivationTANH)
+            if (act_mode== miopenActivationMode_t::miopenActivationTANH)
                 activeAlphaFusionAct = activeBetaFusionAct = 1;
             else if (act_mode == miopenActivationMode_t::miopenActivationELU)
                 activeAlphaFusionAct = ceiling;
             else if (act_mode
                     == miopenActivationMode_t::miopenActivationCLIPPEDRELU)
                 activeAlphaFusionAct = ceiling;
-            else if (act_mode
-                    == miopenActivationMode_t::miopenActivationLEAKYRELU)
+            else if (act_mode == miopenActivationMode_t::miopenActivationLEAKYRELU)
                 activeAlphaFusionAct = ceiling;
 
             // Create the fusion plan
-            MIOPEN_EXECUTE_FUNC(miopenCreateFusionPlan, &fusePlanDesc,
-                    miopenFusionDirection_t::miopenVerticalFusion,
-                    descs[io::x]);
+            MIOPEN_EXECUTE_FUNC(miopenCreateFusionPlan, &fusePlanDesc, miopenFusionDirection_t::miopenVerticalFusion, descs[io::x]);
             MIOPEN_EXECUTE_FUNC(miopenCreateOperatorArgs, &fusionArgs);
 
-            MIOPEN_EXECUTE_FUNC(miopenCreateOpConvForward, fusePlanDesc,
-                    &convoOp, conv_desc, weights_desc);
-            MIOPEN_EXECUTE_FUNC(miopenCreateOpBiasForward, fusePlanDesc,
-                    &biasOp, descs[io::bias]);
-            MIOPEN_EXECUTE_FUNC(miopenCreateOpActivationForward, fusePlanDesc,
-                    &activOp, act_mode);
+            MIOPEN_EXECUTE_FUNC(miopenCreateOpConvForward, fusePlanDesc, &convoOp, conv_desc, weights_desc);
+            MIOPEN_EXECUTE_FUNC(miopenCreateOpBiasForward, fusePlanDesc, &biasOp, descs[io::bias]);
+            MIOPEN_EXECUTE_FUNC(miopenCreateOpActivationForward, fusePlanDesc, &activOp, act_mode);
         }
-
         return status::success;
     }
 
@@ -548,7 +508,6 @@ public:
             bool flip_formats) const {
         const float alpha = 1.0f;
         const float beta = 0.0f;
-
         if (flip_formats) {
             MIOPEN_EXECUTE_FUNC_V(miopenTransformTensor, handle, &alpha,
                     reorder_dst_desc, src, &beta, descs[y], dst);
@@ -576,48 +535,49 @@ public:
             transform_filter(handle, weights, w_scratch);
             weights = w_scratch;
         }
-
+        
         bool fused = conv_bias || conv_bias_eltwise;
-
-        if (fused) {
-            if (conv_bias_eltwise) {
+        if(fused)
+        {
+            if(conv_bias_eltwise)
+            {
                 // compile fusion plan
-                MIOPEN_EXECUTE_FUNC(
-                        miopenCompileFusionPlan, handle, fusePlanDesc);
-
+                MIOPEN_EXECUTE_FUNC(miopenCompileFusionPlan, handle, fusePlanDesc);
+                
                 // set the Args
-                MIOPEN_EXECUTE_FUNC(miopenSetOpArgsConvForward, fusionArgs,
-                        convoOp, x, output, weights);
-                MIOPEN_EXECUTE_FUNC(miopenSetOpArgsActivForward, fusionArgs,
-                        activOp, x, output, activeAlphaFusionAct,
-                        activeBetaFusionAct, activeGammaFusionAct);
-                MIOPEN_EXECUTE_FUNC(miopenSetOpArgsBiasForward, fusionArgs,
-                        biasOp, x, output, bias);
+                MIOPEN_EXECUTE_FUNC(miopenSetOpArgsConvForward, fusionArgs, convoOp, x, output, weights);
+                MIOPEN_EXECUTE_FUNC(miopenSetOpArgsActivForward, fusionArgs, activOp, x, output,
+                                    activeAlphaFusionAct, activeBetaFusionAct, activeGammaFusionAct);
+                MIOPEN_EXECUTE_FUNC(miopenSetOpArgsBiasForward, fusionArgs, biasOp, x, output, bias);
 
                 // execute
-                MIOPEN_EXECUTE_FUNC(miopenExecuteFusionPlan, handle,
-                        fusePlanDesc, descs[io::x], x, descs[io::y], output,
-                        fusionArgs);
-            } else {
+                MIOPEN_EXECUTE_FUNC(miopenExecuteFusionPlan, handle, fusePlanDesc, descs[io::x], x,
+                        descs[io::y], output, fusionArgs);
+            }
+            else
+            {
                 MIOPEN_EXECUTE_FUNC(miopenConvolutionForwardBias, handle,
-                        &alpha, descs[io::bias], bias, &beta, descs[io::y],
-                        output);
+                        &alpha, descs[io::bias], bias, 
+                        &beta, descs[io::y], output);
             }
         }
 
         if (!fused) {
-            const float bias_alpha = 1.0f;
-            const float bias_beta = 1.0f;
-            MIOPEN_EXECUTE_FUNC_V(miopenConvolutionForward, handle, &alpha,
-                    descs[io::x], x, weights_desc, weights, conv_desc,
-                    fwd_alg_kind, &beta, descs[io::y], output, scratchpad,
-                    scratchpad_size);
-            if (with_bias) {
-                int alpha2 = 0;
-                miopenTensorOp_t tensorOp = miopenTensorOpAdd;
-                MIOPEN_EXECUTE_FUNC_V(miopenOpTensor, handle, tensorOp,
-                        &bias_alpha, descs[io::bias], bias, &alpha2,
-                        descs[io::y], y, &bias_beta, descs[io::y], output);
+            MIOPEN_EXECUTE_FUNC_V(miopenConvolutionForwardImmediate,handle,
+                                  weights_desc, weights, 
+                                  descs[io::x], x,
+                                  conv_desc, descs[io::y], output,
+                                  scratchpad, scratchpad_size,
+                                  solutions.solution_id);
+            if (with_bias){
+                float bias_alpha = 0;
+                float alpha2 = 1.0f;
+                float bias_beta = 1.0f;
+
+                MIOPEN_EXECUTE_FUNC_V(miopenOpTensor, handle, miopenTensorOpAdd,
+                            &bias_alpha, descs[io::y], output,
+                            &alpha2, descs[io::bias], bias,
+                            &bias_beta, descs[io::y], output);
             }
         }
         execute_scale(handle, output, runtime_oscale);
@@ -638,7 +598,6 @@ public:
                         execute_sum(
                                 handle, y, post_op_scratch, sum_scale, 1.0f);
                     }
-
                     break;
 
                 case dnnl_eltwise:
@@ -660,13 +619,39 @@ public:
         auto &sycl_engine = *utils::downcast<sycl_hip_engine_t *>(engine);
         stream_t *service_stream;
         CHECK(sycl_engine.get_service_stream(service_stream));
-
         auto hip_stream = utils::downcast<sycl_hip_stream_t *>(service_stream);
         auto handle = hip_stream->get_miopen_handle();
 
-        CHECK(MIOPEN_EXECUTE_FUNC_S(miopenConvolutionForwardGetWorkSpaceSize,
-                handle, weights_desc, descs[x], conv_desc, descs[y],
-                &scratchpad_size));
+        CHECK(MIOPEN_EXECUTE_FUNC_S(miopenConvolutionForwardGetSolutionCount,handle,
+                                    weights_desc,
+                                    descs[io::x],
+                                    conv_desc,
+                                    descs[io::y],
+                                    &solutionCount));
+
+        CHECK(MIOPEN_EXECUTE_FUNC_S(miopenConvolutionForwardGetSolution,handle,
+                                    weights_desc,
+                                    descs[io::x],
+                                    conv_desc,
+                                    descs[io::y],
+                                    solutionCount,
+                                    &actualCount,
+                                    &solutions));
+
+        CHECK(MIOPEN_EXECUTE_FUNC_S(miopenConvolutionForwardGetSolutionWorkspaceSize,handle,
+                                    weights_desc,
+                                    descs[io::x],
+                                    conv_desc,
+                                    descs[io::y],
+                                    solutions.solution_id,
+                                    &scratchpad_size));
+    
+        CHECK(MIOPEN_EXECUTE_FUNC_S(miopenConvolutionForwardCompileSolution,handle,  
+                                        weights_desc,
+                                        descs[io::x],
+                                        conv_desc,
+                                        descs[io::y],
+                                        solutions.solution_id));
 
         if (scratchpad_size > 0)
             pd->scratchpad_registry().registrar().book(
@@ -675,6 +660,7 @@ public:
 
         return miopen_convolution_impl_base_t::init_scratchpad(engine, pd);
     }
+ 
     status_t configure_alg_kind(
             engine_t *engine, convolution_pd_t *pd) override {
         auto &sycl_engine = *utils::downcast<sycl_hip_engine_t *>(engine);
@@ -685,59 +671,12 @@ public:
         auto hip_stream = utils::downcast<sycl_hip_stream_t *>(service_stream);
         auto handle = hip_stream->get_miopen_handle();
 
-        int scratchpad = 0;
-        CHECK(MIOPEN_EXECUTE_FUNC_S(miopenFindConvolutionForwardAlgorithm,
-                handle, descs[x], (void *)x, weights_desc, (void *)weights,
-                conv_desc, descs[y], (void *)y, requested_algo_count,
-                &returned_algo_count, perf.data(), &scratchpad, scratchpad_size,
-                false));
-
-        for (size_t i = 0; i < returned_algo_count; i++) {
-            // miopenFindConvolutionForwardAlgorithm can erroneously report
-            // algorithms for int8 which does not work so ensure that we
-            // only allow CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM
-            // in this case.
-            if (computation_data_type == miopenInt32
-                    && perf[i].fwd_algo
-                            != miopenConvolutionFwdAlgoImplicitGEMM) {
-                continue;
-            }
-            switch (pd->desc()->alg_kind) {
-                case dnnl_convolution_auto:
-                    if (utils::one_of(perf[i].fwd_algo,
-                                miopenConvolutionFwdAlgoGEMM,
-                                miopenConvolutionFwdAlgoImplicitGEMM)) {
-                        utils::downcast<miopen_convolution_fwd_pd_t *>(pd)
-                                ->set_alg_kind(dnnl_convolution_direct);
-                    } else {
-                        utils::downcast<miopen_convolution_fwd_pd_t *>(pd)
-                                ->set_alg_kind(dnnl_convolution_winograd);
-                    }
-                    break;
-                case dnnl_convolution_direct:
-                    if (!utils::one_of(perf[i].fwd_algo,
-                                miopenConvolutionFwdAlgoGEMM,
-                                miopenConvolutionFwdAlgoImplicitGEMM))
-                        continue;
-                    break;
-                case dnnl_convolution_winograd:
-                    if (!(perf[i].fwd_algo == miopenConvolutionFwdAlgoWinograd))
-                        continue;
-                    break;
-                default: return status::unimplemented;
-            }
-            fwd_alg_kind = perf[i].fwd_algo;
-            break;
-        }
-
         double activAlpha, activBeta, activGamma;
         CHECK(MIOPEN_EXECUTE_FUNC_S(
                 miopenCreateActivationDescriptor, &activation_desc));
-        CHECK(MIOPEN_EXECUTE_FUNC_S(miopenSetActivationDescriptor,
-                activation_desc,
-                miopenActivationMode_t::miopenActivationPASTHRU, activAlpha,
-                activBeta, activGamma));
-
+        CHECK(MIOPEN_EXECUTE_FUNC_S(miopenSetActivationDescriptor,activation_desc,
+                miopenActivationMode_t::miopenActivationPASTHRU,
+                activAlpha, activBeta, activGamma));
         return status::success;
     }
 
@@ -748,9 +687,15 @@ public:
 
         miopenActivationMode_t act_mode;
         switch (eltwise_algorithm_kind(pd)) {
-            case alg_kind::eltwise_tanh: act_mode = miopenActivationTANH; break;
-            case alg_kind::eltwise_elu: act_mode = miopenActivationELU; break;
-            case alg_kind::eltwise_relu: act_mode = miopenActivationRELU; break;
+            case alg_kind::eltwise_tanh: 
+                act_mode = miopenActivationTANH; 
+                break;
+            case alg_kind::eltwise_elu:
+                act_mode = miopenActivationELU; 
+                break;
+            case alg_kind::eltwise_relu:
+                act_mode = miopenActivationRELU; 
+                break;
             case alg_kind::eltwise_logistic:
                 act_mode = miopenActivationLOGISTIC;
                 break;
@@ -761,10 +706,9 @@ public:
         float activBeta;
         float activGamma;
 
-        // For ReLU, a ceiling of 0 means no limit.
         double ceiling = eltwise_alpha(pd);
 
-        if (act_mode == miopenActivationMode_t::miopenActivationTANH)
+        if (act_mode== miopenActivationMode_t::miopenActivationTANH)
             activAlpha = activBeta = 1;
         else if (act_mode == miopenActivationMode_t::miopenActivationELU)
             activAlpha = ceiling;
@@ -775,7 +719,8 @@ public:
             activAlpha = ceiling;
 
         CHECK(MIOPEN_EXECUTE_FUNC_S(miopenSetActivationDescriptor, eltwise_desc,
-                act_mode, activAlpha, activBeta, activGamma));
+                act_mode, activAlpha, activBeta,
+                activGamma)); 
 
         return status::success;
     }
@@ -818,33 +763,33 @@ protected:
                 &returned_algo_count, perf.data(), &scratchpad, scratchpad_size,
                 false));
         for (size_t i = 0; i < returned_algo_count; i++) {
-            switch (pd->desc()->alg_kind) {
-                case dnnl_convolution_auto:
-                    if (utils::one_of(perf[i].bwd_data_algo,
-                                miopenConvolutionBwdDataAlgoGEMM,
-                                miopenConvolutionBwdDataAlgoDirect)) {
-                        utils::downcast<miopen_convolution_bwd_data_pd_t *>(pd)
-                                ->set_alg_kind(dnnl_convolution_direct);
-                    } else {
-                        utils::downcast<miopen_convolution_bwd_data_pd_t *>(pd)
-                                ->set_alg_kind(dnnl_convolution_winograd);
-                    }
-                    break;
-                case dnnl_convolution_direct:
-                    if (!utils::one_of(perf[i].bwd_data_algo,
-                                miopenConvolutionBwdDataAlgoGEMM,
-                                miopenConvolutionBwdDataAlgoDirect))
-                        continue;
-                    break;
-                case dnnl_convolution_winograd:
-                    if (!utils::one_of(perf[i].bwd_data_algo,
-                                miopenConvolutionBwdDataAlgoWinograd))
-                        continue;
-                    break;
-                default: return status::unimplemented;
-            }
-            bwd_algo = perf[i].bwd_data_algo;
-            break;
+                switch (pd->desc()->alg_kind) {
+                    case dnnl_convolution_auto:
+                        if (utils::one_of(perf[i].bwd_data_algo,
+                                    miopenConvolutionBwdDataAlgoGEMM,
+                                    miopenConvolutionBwdDataAlgoDirect)) {
+                            utils::downcast<miopen_convolution_bwd_data_pd_t *>(                                    pd)
+                                    ->set_alg_kind(dnnl_convolution_direct);
+                        } else {
+                            utils::downcast<miopen_convolution_bwd_data_pd_t *>(                                    pd)
+                                    ->set_alg_kind(dnnl_convolution_winograd);
+                        }
+                        break;
+                    case dnnl_convolution_direct:
+                        if (!utils::one_of(perf[i].bwd_data_algo,
+                                    miopenConvolutionBwdDataAlgoGEMM,
+                                    miopenConvolutionBwdDataAlgoDirect))
+                            continue;
+                        break;
+                    case dnnl_convolution_winograd:
+                        if (!utils::one_of(perf[i].bwd_data_algo,
+                                    miopenConvolutionBwdDataAlgoWinograd))
+                            continue;
+                        break;
+                    default: return status::unimplemented;
+                }
+                bwd_algo = perf[i].bwd_data_algo;
+                break;
         }
         return status::success;
     }
@@ -951,35 +896,34 @@ public:
                 (void *)weights, requested_algo_count, &returned_algo_count,
                 perf.data(), &scratchpad, scratchpad_size, false));
         for (size_t i = 0; i < returned_algo_count; i++) {
-            switch (pd->desc()->alg_kind) {
-                case dnnl_convolution_auto:
-                    if (utils::one_of(perf[i].bwd_weights_algo,
-                                miopenConvolutionBwdWeightsAlgoGEMM,
-                                miopenConvolutionBwdWeightsAlgoDirect)) {
-                        utils::downcast<miopen_convolution_bwd_weights_pd_t *>(
-                                pd)
-                                ->set_alg_kind(dnnl_convolution_direct);
-                    } else {
-                        utils::downcast<miopen_convolution_bwd_weights_pd_t *>(
-                                pd)
-                                ->set_alg_kind(dnnl_convolution_winograd);
-                    }
-                    break;
-                case dnnl_convolution_direct:
-                    if (!utils::one_of(perf[i].bwd_weights_algo,
-                                miopenConvolutionBwdWeightsAlgoGEMM,
-                                miopenConvolutionBwdWeightsAlgoDirect))
-                        continue;
-                    break;
-                case dnnl_convolution_winograd:
-                    if (!(perf[i].bwd_weights_algo
-                                == miopenConvolutionBwdWeightsAlgoWinograd))
-                        continue;
-                    break;
-                default: return status::unimplemented;
-            }
-            bwd_filter_algo = perf[i].bwd_weights_algo;
-            break;
+                switch (pd->desc()->alg_kind) {
+                    case dnnl_convolution_auto:
+                        if (utils::one_of(perf[i].bwd_weights_algo,
+                                    miopenConvolutionBwdWeightsAlgoGEMM,
+                                    miopenConvolutionBwdWeightsAlgoDirect)) {
+                            utils::downcast<
+                                    miopen_convolution_bwd_weights_pd_t *>(pd)
+                                    ->set_alg_kind(dnnl_convolution_direct);
+                        } else {
+                            utils::downcast<
+                                    miopen_convolution_bwd_weights_pd_t *>(pd)
+                                    ->set_alg_kind(dnnl_convolution_winograd);
+                        }
+                        break;
+                    case dnnl_convolution_direct:
+                        if (!utils::one_of(perf[i].bwd_weights_algo,
+                                    miopenConvolutionBwdWeightsAlgoGEMM,
+                                    miopenConvolutionBwdWeightsAlgoDirect))
+                            continue;
+                        break;
+                    case dnnl_convolution_winograd:
+                        if( !(perf[i].bwd_weights_algo == miopenConvolutionBwdWeightsAlgoWinograd))
+                            continue;
+                        break;
+                    default: return status::unimplemented;
+                }
+                bwd_filter_algo = perf[i].bwd_weights_algo;
+                break;
         }
         return status::success;
     }
@@ -998,8 +942,7 @@ public:
 
         if (scratchpad_size > 0)
             pd->scratchpad_registry().registrar().book(
-                    memory_tracking::names::
-                            key_conv_miopen_algo, //key_conv_miopen_algo
+                    memory_tracking::names::key_conv_miopen_algo,
                     scratchpad_size, size_t(1));
 
         return miopen_convolution_impl_base_t::init_scratchpad(engine, pd);
