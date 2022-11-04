@@ -23,6 +23,7 @@
 #include "sycl/sycl_utils.hpp"
 
 #include "gpu/amd/miopen_binary.hpp"
+#include "gpu/amd/miopen_convolution.hpp"
 #include "gpu/amd/miopen_eltwise.hpp"
 #include "gpu/amd/miopen_lrn.hpp"
 #include "gpu/amd/miopen_pooling.hpp"
