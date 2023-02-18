@@ -16,6 +16,7 @@
 *******************************************************************************/
 
 #include "gpu/amd/sycl_hip_utils.hpp"
+#include "common/utils.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -27,6 +28,33 @@ bool compare_hip_devices(const ::sycl::device &lhs, const ::sycl::device &rhs) {
     auto rhs_hip_handle = compat::get_native<HIPdevice>(rhs);
 
     return lhs_hip_handle == rhs_hip_handle;
+}
+
+bool attr_post_ops_ok(const primitive_attr_t *attr) {
+    using namespace primitive_kind;
+    const auto &po = attr->post_ops_;
+    const int eltwise_idx = po.find(eltwise);
+    if (eltwise_idx != -1) {
+        const auto &e = po.entry_[eltwise_idx].eltwise;
+
+        using namespace alg_kind;
+        const bool ok = utils::one_of(e.alg, eltwise_relu, eltwise_tanh,
+                eltwise_elu, eltwise_logistic);
+        if (!ok) return false;
+
+        // No alpha or beta extension is supported.
+        if (e.alpha != 0) return false;
+
+        // Only a single eltwise post-op is supported.
+        if (po.find(eltwise, eltwise_idx + 1) != -1) return false;
+    }
+
+    switch (po.len()) {
+        case 0: return true;
+        case 1: return po.contain(sum, 0) || po.contain(eltwise, 0);
+        case 2: return po.contain(sum, 0) && po.contain(eltwise, 1);
+        default: return false;
+    }
 }
 
 } // namespace amd
